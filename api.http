@@ -1,0 +1,18 @@
+# create test api get  https://geodev.fun/ucs/api/captures 
+POST https://geodev.fun/ucs/api/upload
+
+@image=./capture_images/cap1_20260511_102332.jpg
+device_id=CAM_LEFT
+lat=13.755
+lng=100.501
+accuracy=3.2
+
+###
+POST https://geodev.fun/ucs/api/upload
+Content-Type: multipart/form-data
+
+@image=./capture_images/cap1_20260511_102332.jpg
+device_id=CAM_LEFT
+lat=13.755
+lng=100.501
+accuracy=3.2

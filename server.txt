@@ -1,0 +1,6 @@
+ssh root@geodev.fun
+
+cd urbancam
+docker compose stop
+git pull
+docker compose up --build
