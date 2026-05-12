@@ -10,10 +10,15 @@ app = Flask(__name__)
 # =========================
 # SERVER API
 # =========================
-SERVER_IMAGE_URL    = "https://geodev.fun/ucs/api/image/"
-SERVER_CAPTURES_URL = "https://geodev.fun/ucs/api/captures"
-SERVER_UPLOAD_URL   = "https://geodev.fun/ucs/api/upload"
-SERVER_GPS_URL      = "https://geodev.fun/ucs/api/gps"
+# SERVER_IMAGE_URL    = "https://geodev.fun/ucs/api/image/"
+# SERVER_CAPTURES_URL = "https://geodev.fun/ucs/api/captures"
+# SERVER_UPLOAD_URL   = "https://geodev.fun/ucs/api/upload"
+# SERVER_GPS_URL      = "https://geodev.fun/ucs/api/gps"
+
+SERVER_IMAGE_URL    = "http://localhost:6601/ucs/api/image/"
+SERVER_CAPTURES_URL = "http://localhost:6601/ucs/api/captures"
+SERVER_UPLOAD_URL   = "http://localhost:6601/ucs/api/upload"
+SERVER_GPS_URL      = "http://localhost:6601/ucs/api/gps"
 
 latest_capture = {}
 latest_gps     = {"lat": None, "lng": None, "accuracy": None}
@@ -93,6 +98,7 @@ button:disabled{opacity:.35;cursor:not-allowed;}
 .btn-start{background:#4CAF50;color:#fff;}
 .btn-stop {background:#f44336;color:#fff;}
 .btn-cam  {background:#555;color:#fff;}
+.btn-delete{background:#ff5252;color:#fff;padding:8px 12px;font-size:12px;}
 #status{margin-left:auto;font-size:13px;color:#555;font-style:italic;}
 
 /* SECTION */
@@ -258,10 +264,11 @@ button:disabled{opacity:.35;cursor:not-allowed;}
                 <th>กล้อง</th>
                 <th>เวลา (UTC+7)</th>
                 <th>พิกัด GPS</th>
+                <th>จัดการ</th>
             </tr>
         </thead>
         <tbody id="fileTableBody">
-            <tr class="empty-row"><td colspan="5">กำลังโหลด...</td></tr>
+            <tr class="empty-row"><td colspan="6">กำลังโหลด...</td></tr>
         </tbody>
     </table>
 </div>
@@ -413,7 +420,7 @@ async function loadDB(){
         const tbody=document.getElementById('fileTableBody');
 
         if(!list||list.error||!list.length){
-            tbody.innerHTML='<tr class="empty-row"><td colspan="5">ยังไม่มีข้อมูลใน database</td></tr>';
+            tbody.innerHTML='<tr class="empty-row"><td colspan="6">ยังไม่มีข้อมูลใน database</td></tr>';
             document.getElementById('db-count').textContent='0 รายการ';
             return;
         }
@@ -431,6 +438,7 @@ async function loadDB(){
                 : `<span class="no-gps-chip">ไม่มี GPS</span>`;
 
             const dataJson = encodeURIComponent(JSON.stringify(item));
+            const fileArg  = encodeURIComponent(item.filename);
 
             return `
             <tr onclick="openModal('${dataJson}')">
@@ -439,12 +447,33 @@ async function loadDB(){
                 <td>${badge}</td>
                 <td style="font-family:monospace;font-size:12px;color:#555;white-space:nowrap;">${item.captured_at}</td>
                 <td>${gpsCell}</td>
+                <td style="white-space:nowrap;text-align:center;">
+                    <button class="btn-delete" onclick="event.stopPropagation(); deleteCapture('${fileArg}')">🗑️ ลบ</button>
+                </td>
             </tr>`;
         }).join('');
 
     } catch(e){
         document.getElementById('fileTableBody').innerHTML=
-            `<tr class="empty-row"><td colspan="5">⚠ โหลดไม่ได้: ${e.message}</td></tr>`;
+            `<tr class="empty-row"><td colspan="6">⚠ โหลดไม่ได้: ${e.message}</td></tr>`;
+    }
+}
+
+async function deleteCapture(filename){
+    if(!filename) return;
+    const decoded = decodeURIComponent(filename);
+    if(!confirm(`ยืนยันลบไฟล์ ${decoded} ?`)) return;
+    setStatus('กำลังลบ '+decoded+'...');
+    try{
+        const res = await fetch(`/delete_capture/${filename}`, {method:'DELETE'});
+        const data = await res.json();
+        if(!res.ok || data.error){
+            throw new Error(data.error || `HTTP ${res.status}`);
+        }
+        setStatus('ลบสำเร็จ: '+decoded);
+        await loadDB();
+    } catch(err){
+        setStatus('⚠ ไม่สามารถลบได้: '+err.message);
     }
 }
 
@@ -618,6 +647,17 @@ def server_captures():
         return jsonify(results)
     except Exception as e:
         return jsonify({"error": str(e)})
+
+@app.route('/delete_capture/<path:filename>', methods=['DELETE'])
+def delete_capture(filename):
+    try:
+        target_url = f"{SERVER_CAPTURES_URL}/{filename}"
+        response = requests.delete(target_url, timeout=10)
+        if response.ok:
+            return jsonify({"ok": True, "status_code": response.status_code})
+        return jsonify({"error": response.text or 'Delete failed', "status_code": response.status_code}), response.status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/capture_images/<filename>')
 def images(filename):
