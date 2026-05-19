@@ -10,15 +10,15 @@ app = Flask(__name__)
 # =========================
 # SERVER API
 # =========================
-# SERVER_IMAGE_URL    = "https://geodev.fun/ucs/api/image/"
-# SERVER_CAPTURES_URL = "https://geodev.fun/ucs/api/captures"
-# SERVER_UPLOAD_URL   = "https://geodev.fun/ucs/api/upload"
-# SERVER_GPS_URL      = "https://geodev.fun/ucs/api/gps"
+SERVER_IMAGE_URL    = "https://geodev.fun/ucs/api/image/"
+SERVER_CAPTURES_URL = "https://geodev.fun/ucs/api/captures"
+SERVER_UPLOAD_URL   = "https://geodev.fun/ucs/api/upload"
+SERVER_GPS_URL      = "https://geodev.fun/ucs/api/gps"
 
-SERVER_IMAGE_URL    = "http://localhost:6601/ucs/api/image/"
-SERVER_CAPTURES_URL = "http://localhost:6601/ucs/api/captures"
-SERVER_UPLOAD_URL   = "http://localhost:6601/ucs/api/upload"
-SERVER_GPS_URL      = "http://localhost:6601/ucs/api/gps"
+# SERVER_IMAGE_URL    = "http://localhost:6601/ucs/api/image/"
+# SERVER_CAPTURES_URL = "http://localhost:6601/ucs/api/captures"
+# SERVER_UPLOAD_URL   = "http://localhost:6601/ucs/api/upload"
+# SERVER_GPS_URL      = "http://localhost:6601/ucs/api/gps"
 
 latest_capture = {}
 latest_gps     = {"lat": None, "lng": None, "accuracy": None}
