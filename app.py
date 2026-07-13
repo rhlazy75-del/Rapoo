@@ -3,6 +3,7 @@ import cv2 as cv
 import os
 import time
 import requests
+import threading #เพิ่มเข้ามา 22/6
 from datetime import datetime
 
 app = Flask(__name__)
@@ -26,14 +27,28 @@ latest_gps     = {"lat": None, "lng": None, "accuracy": None}
 folder_name = "capture_images"
 os.makedirs(folder_name, exist_ok=True)
 
-cap1 = cv.VideoCapture(1, cv.CAP_DSHOW)
-cap2 = cv.VideoCapture(2, cv.CAP_DSHOW)
-cap1.set(cv.CAP_PROP_FRAME_WIDTH, 640)
-cap1.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
-cap2.set(cv.CAP_PROP_FRAME_WIDTH, 640)
-cap2.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
-print("Camera1:", cap1.isOpened())
-print("Camera2:", cap2.isOpened())
+cap1 = cv.VideoCapture(1, cv.CAP_V4L2)
+cap2 = cv.VideoCapture(2, cv.CAP_V4L2)
+
+for cap in (cap1, cap2):
+    cap.set(cv.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
+    
+    
+    cap.set(cv.CAP_PROP_AUTO_EXPOSURE, 0.25)  # ปิด Auto Exposure คือ 1, เปิดคือ 0
+    cap.set(cv.CAP_PROP_EXPOSURE, -6)  
+    cap.set(cv.CAP_PROP_BRIGHTNESS, 10)  
+    cap.set(cv.CAP_PROP_CONTRAST, 40)  
+    cap.set(cv.CAP_PROP_SATURATION, 50) 
+    cap.set(cv.CAP_PROP_GAIN, 0) 
+    cap.set(cv.CAP_PROP_AUTO_WB, 0)  # ปิด Auto White Balance
+
+# cap1.set(cv.CAP_PROP_FRAME_WIDTH, 640)
+# cap1.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
+# cap2.set(cv.CAP_PROP_FRAME_WIDTH, 640)
+# cap2.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
+# print("Camera1:", cap1.isOpened())
+# print("Camera2:", cap2.isOpened())
 
 capture_interval     = 5
 last_capture_time    = time.time()
@@ -549,10 +564,11 @@ def save_images():
     global last_capture_time
     if not camera_running:
         return {"error": "Camera stopped"}
-    for _ in range(3):
-        cap1.read(); cap2.read()
+    # for _ in range(3): #ตัดออก - ลดจำนวนภาพค้างจาก 3 เหลือ 1
+    cap1.read(); cap2.read()
     ret1, frame1 = cap1.read()
     ret2, frame2 = cap2.read()
+
     if not ret1: return {"error": "Camera 1 failed"}
     if not ret2: return {"error": "Camera 2 failed"}
 
@@ -565,8 +581,13 @@ def save_images():
     cv.imwrite(path2, frame2)
     print(f"Saved: {path1}, {path2}")
 
-    upload_image(path1, "CAM_LEFT")
-    upload_image(path2, "CAM_RIGHT")
+    t1 = threading.Thread(target=upload_image, args=(path1, "CAM_LEFT"), daemon=True)
+    t2 = threading.Thread(target=upload_image, args=(path2, "CAM_RIGHT"), daemon=True)
+    t1.start();t2.start()
+
+# change upload by threading
+    # upload_image(path1, "CAM_LEFT")
+    # upload_image(path2, "CAM_RIGHT")
 
     last_capture_time = time.time()
     global latest_capture
