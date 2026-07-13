@@ -27,29 +27,55 @@ latest_gps     = {"lat": None, "lng": None, "accuracy": None}
 folder_name = "capture_images"
 os.makedirs(folder_name, exist_ok=True)
 
-cap1 = cv.VideoCapture(1, cv.CAP_V4L2)
-cap2 = cv.VideoCapture(2, cv.CAP_V4L2)
+# ═══════ ตรงนี้คือส่วนที่แทนที่ใหม่ ═══════
+import subprocess
 
-for cap in (cap1, cap2):
-    cap.set(cv.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
-    
-    
-    cap.set(cv.CAP_PROP_AUTO_EXPOSURE, 0.25)  # ปิด Auto Exposure คือ 1, เปิดคือ 0
-    cap.set(cv.CAP_PROP_EXPOSURE, -6)  
-    cap.set(cv.CAP_PROP_BRIGHTNESS, 10)  
-    cap.set(cv.CAP_PROP_CONTRAST, 40)  
-    cap.set(cv.CAP_PROP_SATURATION, 50) 
-    cap.set(cv.CAP_PROP_GAIN, 0) 
-    cap.set(cv.CAP_PROP_AUTO_WB, 0)  # ปิด Auto White Balance
+def v4l2_set(device, control, value):
+    result = subprocess.run(
+        ["v4l2-ctl", "-d", device, "-c", f"{control}={value}"],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        print(f"[{device}] ตั้งค่า {control}={value} ไม่สำเร็จ: {result.stderr.strip()}")
+    else:
+        print(f"[{device}] ตั้งค่า {control}={value} สำเร็จ")
 
-# cap1.set(cv.CAP_PROP_FRAME_WIDTH, 640)
+CAM1_DEVICE = "/dev/video0"
+CAM2_DEVICE = "/dev/video2"
+
+EXPOSURE_VALUE = 120
+WB_TEMPERATURE = 4500
+
+for device in (CAM1_DEVICE, CAM2_DEVICE):
+    v4l2_set(device, "exposure_auto", 1)
+    v4l2_set(device, "exposure_auto_priority", 0)
+    v4l2_set(device, "exposure_absolute", EXPOSURE_VALUE)
+    v4l2_set(device, "white_balance_temperature_auto", 0)
+    v4l2_set(device, "white_balance_temperature", WB_TEMPERATURE)
+    v4l2_set(device, "brightness", 10)
+    v4l2_set(device, "contrast", 40)
+    v4l2_set(device, "saturation", 50)
+
+cap1 = cv.VideoCapture(CAM1_DEVICE, cv.CAP_V4L2)
+cap2 = cv.VideoCapture(CAM2_DEVICE, cv.CAP_V4L2)
+cap1.set(cv.CAP_PROP_FRAME_WIDTH, 640)
+cap1.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
+cap2.set(cv.CAP_PROP_FRAME_WIDTH, 640)
+cap2.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
+print("Camera1:", cap1.isOpened())
+print("Camera2:", cap2.isOpened())
+
+# ═══════ จบส่วนที่แทนที่ ═══════
+
+# cap1.set(cv.CAP_PROP_FRAME_WIDTH, 640)     ← คอมเมนต์เดิม ปล่อยไว้เหมือนเดิม
 # cap1.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
 # cap2.set(cv.CAP_PROP_FRAME_WIDTH, 640)
 # cap2.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
 # print("Camera1:", cap1.isOpened())
 # print("Camera2:", cap2.isOpened())
 
+capture_interval     = 5
+last_capture_time    = time.time()
 capture_interval     = 5
 last_capture_time    = time.time()
 auto_capture_enabled = False
