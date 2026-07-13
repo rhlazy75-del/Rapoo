@@ -27,7 +27,7 @@ latest_gps     = {"lat": None, "lng": None, "accuracy": None}
 folder_name = "capture_images"
 os.makedirs(folder_name, exist_ok=True)
 
-# ═══════ ตรงนี้คือส่วนที่แทนที่ใหม่ ═══════
+# ═══════ ตรงนี้คือส่วนที่แทนที่ใหม่ (แก้ให้) ═══════
 import subprocess
 
 def v4l2_set(device, control, value):
@@ -36,34 +36,52 @@ def v4l2_set(device, control, value):
         capture_output=True, text=True
     )
     if result.returncode != 0:
-        print(f"[{device}] ตั้งค่า {control}={value} ไม่สำเร็จ: {result.stderr.strip()}")
+        print(f"[{device}] set {control}={value} FAIL: {result.stderr.strip()}")
     else:
-        print(f"[{device}] ตั้งค่า {control}={value} สำเร็จ")
+        print(f"[{device}] set {control}={value} OK")
 
 CAM1_DEVICE = "/dev/video0"
 CAM2_DEVICE = "/dev/video2"
 
-EXPOSURE_VALUE = 120
-WB_TEMPERATURE = 4500
+# กลางแจ้งให้ต่ำมาก ๆ ก่อน (ค่อยไล่เพิ่มทีหลัง)
+EXPOSURE_VALUE = 5
 
-for device in (CAM1_DEVICE, CAM2_DEVICE):
-    v4l2_set(device, "exposure_auto", 1)
-    v4l2_set(device, "exposure_auto_priority", 0)
-    v4l2_set(device, "exposure_absolute", EXPOSURE_VALUE)
-    v4l2_set(device, "white_balance_temperature_auto", 0)
-    v4l2_set(device, "white_balance_temperature", WB_TEMPERATURE)
-    v4l2_set(device, "brightness", 10)
-    v4l2_set(device, "contrast", 40)
-    v4l2_set(device, "saturation", 50)
-
+# 1) เปิดกล้องก่อน
 cap1 = cv.VideoCapture(CAM1_DEVICE, cv.CAP_V4L2)
 cap2 = cv.VideoCapture(CAM2_DEVICE, cv.CAP_V4L2)
+
 cap1.set(cv.CAP_PROP_FRAME_WIDTH, 640)
 cap1.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
 cap2.set(cv.CAP_PROP_FRAME_WIDTH, 640)
 cap2.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
+
 print("Camera1:", cap1.isOpened())
 print("Camera2:", cap2.isOpened())
+
+time.sleep(0.3)
+
+# 2) ค่อยตั้งค่าด้วย v4l2 หลังเปิดกล้อง (กันค่าโดนรีเซ็ต)
+def apply_settings(device, exp):
+    v4l2_set(device, "exposure_auto", 1)            # manual (ตาม list-ctrls ของพี่)
+    v4l2_set(device, "exposure_auto_priority", 0)
+    v4l2_set(device, "exposure_absolute", exp)
+
+    # WB แนะนำให้ AUTO ก่อน จะเอาตัวรอดกลางแจ้งดีกว่า
+    v4l2_set(device, "white_balance_temperature_auto", 1)
+
+    # ลดความฟุ้ง
+    v4l2_set(device, "brightness", 0)
+    v4l2_set(device, "contrast", 32)
+    v4l2_set(device, "saturation", 64)
+    v4l2_set(device, "gain", 0)
+
+apply_settings(CAM1_DEVICE, EXPOSURE_VALUE)
+apply_settings(CAM2_DEVICE, EXPOSURE_VALUE)
+
+# 3) อ่านเฟรมทิ้งให้ค่ากล้องนิ่งก่อนเริ่มใช้งานจริง
+for _ in range(10):
+    cap1.read()
+    cap2.read()
 
 # ═══════ จบส่วนที่แทนที่ ═══════
 
@@ -73,9 +91,7 @@ print("Camera2:", cap2.isOpened())
 # cap2.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
 # print("Camera1:", cap1.isOpened())
 # print("Camera2:", cap2.isOpened())
-
-capture_interval     = 5
-last_capture_time    = time.time()
+ 
 capture_interval     = 5
 last_capture_time    = time.time()
 auto_capture_enabled = False
