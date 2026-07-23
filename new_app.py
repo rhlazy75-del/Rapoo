@@ -21,13 +21,16 @@ SERVER_GPS_URL      = "https://geodev.fun/ucs/api/gps"
 # SERVER_UPLOAD_URL   = "http://localhost:6601/ucs/api/upload"
 # SERVER_GPS_URL      = "http://localhost:6601/ucs/api/gps"
 
+# จำนวนรายการล่าสุดที่จะแสดงในตาราง
+DISPLAY_LIMIT = 25
+
 latest_capture = {}
 latest_gps     = {"lat": None, "lng": None, "accuracy": None}
 
 folder_name = "capture_images"
 os.makedirs(folder_name, exist_ok=True)
 
-# ═══════ ตรงนี้คือส่วนที่แทนที่ใหม่ (แก้ให้) ═══════
+# ═══════ ส่วนควบคุมกล้อง ═══════
 import subprocess
 
 def v4l2_set(device, control, value):
@@ -46,14 +49,17 @@ CAM2_DEVICE = "/dev/video2"
 # กลางแจ้งให้ต่ำมาก ๆ ก่อน (ค่อยไล่เพิ่มทีหลัง)
 EXPOSURE_VALUE = 5
 
-# 1) เปิดกล้องก่อน
 cap1 = cv.VideoCapture(CAM1_DEVICE, cv.CAP_V4L2)
-cap2 = cv.VideoCapture(CAM2_DEVICE, cv.CAP_V4L2)
+cap1.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc(*'MJPG'))
+cap1.set(cv.CAP_PROP_FRAME_WIDTH, 1280)
+cap1.set(cv.CAP_PROP_FRAME_HEIGHT, 720)
+cap1.set(cv.CAP_PROP_FPS, 10)
 
-cap1.set(cv.CAP_PROP_FRAME_WIDTH, 640)
-cap1.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
-cap2.set(cv.CAP_PROP_FRAME_WIDTH, 640)
-cap2.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
+cap2 = cv.VideoCapture(CAM2_DEVICE, cv.CAP_V4L2)
+cap2.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc(*'MJPG'))
+cap2.set(cv.CAP_PROP_FRAME_WIDTH, 1280)
+cap2.set(cv.CAP_PROP_FRAME_HEIGHT, 720)
+cap2.set(cv.CAP_PROP_FPS, 10)
 
 print("Camera1:", cap1.isOpened())
 print("Camera2:", cap2.isOpened())
@@ -62,7 +68,7 @@ time.sleep(0.3)
 
 # 2) ค่อยตั้งค่าด้วย v4l2 หลังเปิดกล้อง (กันค่าโดนรีเซ็ต)
 def apply_settings(device, exp):
-    v4l2_set(device, "exposure_auto", 1) 
+    v4l2_set(device, "exposure_auto", 1)
     v4l2_set(device, "exposure_auto_priority", 0)
     v4l2_set(device, "exposure_absolute", exp)
 
@@ -70,7 +76,7 @@ def apply_settings(device, exp):
     v4l2_set(device, "white_balance_temperature_auto", 1)
 
     # ลดความฟุ้ง
-    v4l2_set(device, "brightness", 0) #เพิ่มเป็น 10 
+    v4l2_set(device, "brightness", 0) #เพิ่มเป็น 10
     v4l2_set(device, "contrast", 32)
     v4l2_set(device, "saturation", 64)
     v4l2_set(device, "gain", 0) #
@@ -85,14 +91,7 @@ for _ in range(10):
 
 # ═══════ จบส่วนที่แทนที่ ═══════
 
-# cap1.set(cv.CAP_PROP_FRAME_WIDTH, 640)     
-# cap1.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
-# cap2.set(cv.CAP_PROP_FRAME_WIDTH, 640)
-# cap2.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
-# print("Camera1:", cap1.isOpened())
-# print("Camera2:", cap2.isOpened())
- 
-capture_interval     = 5
+capture_interval     = 10 
 last_capture_time    = time.time()
 auto_capture_enabled = False
 camera_running       = True
@@ -108,21 +107,26 @@ HTML = '''
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:Arial,sans-serif;background:#f0f2f5;padding-top:52px;}
+:root{
+    --navy:#12122b; --navy2:#1a1a3a; --cyan:#00e5ff; --cyan-dim:rgba(0,229,255,.12);
+    --bg:#eef1f6; --card:#fff; --text:#233; --muted:#7a8296;
+}
+body{font-family:"Segoe UI",Arial,sans-serif;background:var(--bg);padding-top:56px;color:var(--text);}
 
 /* TOP BAR */
 .topbar{
-    position:fixed;top:0;left:0;right:0;height:52px;
-    background:#1a1a2e;display:flex;align-items:center;
-    justify-content:space-between;padding:0 16px;
-    z-index:9999;box-shadow:0 2px 8px rgba(0,0,0,.4);
+    position:fixed;top:0;left:0;right:0;height:56px;
+    background:linear-gradient(120deg,var(--navy),var(--navy2));
+    display:flex;align-items:center;
+    justify-content:space-between;padding:0 18px;
+    z-index:9999;box-shadow:0 2px 10px rgba(0,0,0,.35);
 }
-.topbar-title{color:#00e5ff;font-size:15px;font-weight:bold;letter-spacing:2px;}
+.topbar-title{color:var(--cyan);font-size:15px;font-weight:700;letter-spacing:2px;text-shadow:0 0 12px rgba(0,229,255,.35);}
 .cam-pills{display:flex;gap:10px;}
 .cam-pill{
     display:flex;align-items:center;gap:6px;padding:5px 12px;
     border-radius:20px;font-size:12px;font-weight:bold;
-    border:1px solid #444;color:#666;background:#111;transition:all .3s;
+    border:1px solid #3a3a5c;color:#667;background:#0e0e22;transition:all .3s;
 }
 .cam-pill.on{border-color:#39ff6b;color:#39ff6b;background:rgba(57,255,107,.08);}
 .dot{width:8px;height:8px;border-radius:50%;background:currentColor;flex-shrink:0;}
@@ -130,75 +134,96 @@ body{font-family:Arial,sans-serif;background:#f0f2f5;padding-top:52px;}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
 
 /* MAP */
-#map{width:100%;height:280px;border-bottom:3px solid #00e5ff;}
-.map-wrap{position:relative;}
+.map-section{margin:20px;}
+.map-label{
+    font-size:13px;letter-spacing:2px;text-transform:uppercase;
+    color:var(--muted);margin-bottom:10px;font-weight:700;
+}
+.map-wrap{position:relative;border-radius:12px;overflow:hidden;box-shadow:0 2px 14px rgba(0,0,0,.12);}
+#map{width:100%;height:280px;}
 .gps-box{
     position:absolute;bottom:10px;left:10px;z-index:500;
-    background:rgba(0,0,0,.75);color:#00e5ff;font-size:11px;
+    background:rgba(10,10,25,.8);color:var(--cyan);font-size:11px;
     font-family:monospace;padding:5px 10px;border-radius:5px;
-    border:1px solid #00e5ff;pointer-events:none;
+    border:1px solid var(--cyan);pointer-events:none;
 }
 
-/* CONTROLS */
+/* CONTROLS - 4 ปุ่มตามผัง */
 .controls{
-    background:#fff;padding:14px 20px;
-    display:flex;align-items:center;gap:10px;flex-wrap:wrap;
-    border-bottom:1px solid #ddd;
+    margin:20px;
+    background:var(--card);padding:16px;border-radius:12px;
+    display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+    box-shadow:0 2px 10px rgba(0,0,0,.06);
+    border-left:4px solid var(--cyan);
 }
 button{
-    padding:12px 22px;font-size:15px;border:none;border-radius:6px;
-    cursor:pointer;font-weight:bold;transition:transform .1s;
+    padding:13px 20px;font-size:14px;border:none;border-radius:8px;
+    cursor:pointer;font-weight:700;transition:transform .1s,filter .15s,box-shadow .15s;
+    box-shadow:0 2px 6px rgba(0,0,0,.12);
 }
+button:hover{filter:brightness(1.06);box-shadow:0 4px 10px rgba(0,0,0,.18);}
 button:active{transform:scale(.97);}
 button:disabled{opacity:.35;cursor:not-allowed;}
-.btn-once {background:#2196F3;color:#fff;}
-.btn-start{background:#4CAF50;color:#fff;}
-.btn-stop {background:#f44336;color:#fff;}
-.btn-cam  {background:#555;color:#fff;}
-.btn-delete{background:#ff5252;color:#fff;padding:8px 12px;font-size:12px;}
-#status{margin-left:auto;font-size:13px;color:#555;font-style:italic;}
+.btn-once  {background:#2196F3;color:#fff;}
+.btn-start {background:#4CAF50;color:#fff;}
+.btn-stop  {background:#f44336;color:#fff;}
+.btn-wipe  {background:#7c1fa2;color:#fff;}
+.btn-cam   {background:#555;color:#fff;}
+.btn-delete{background:#ff5252;color:#fff;padding:8px 12px;font-size:12px;border-radius:6px;}
+#status{margin-left:auto;font-size:13px;color:var(--muted);font-style:italic;}
 
 /* SECTION */
 .section{margin:20px;}
 .section h2{
     font-size:13px;letter-spacing:2px;text-transform:uppercase;
-    color:#888;margin-bottom:14px;border-bottom:1px solid #ddd;
-    padding-bottom:6px;display:flex;align-items:center;gap:8px;
+    color:var(--muted);margin-bottom:14px;border-bottom:1px solid #dfe3ea;
+    padding-bottom:8px;display:flex;align-items:center;gap:8px;font-weight:700;
 }
 .badge{
-    background:#1a1a2e;color:#00e5ff;font-size:11px;
-    padding:2px 8px;border-radius:10px;font-family:monospace;
+    background:var(--navy);color:var(--cyan);font-size:11px;
+    padding:3px 9px;border-radius:10px;font-family:monospace;font-weight:700;
 }
 
-/* ภาพกล้องตัวเอง */
+/* กล้อง LEFT / RIGHT */
 .cam-row{display:flex;gap:16px;flex-wrap:wrap;}
 .cam-card{
-    background:#fff;padding:10px;border-radius:10px;
-    box-shadow:0 2px 10px rgba(0,0,0,.1);width:320px;
+    background:var(--card);padding:0;border-radius:12px;overflow:hidden;
+    box-shadow:0 2px 12px rgba(0,0,0,.1);width:340px;
+    border-top:3px solid var(--cyan);transition:box-shadow .2s,transform .2s;
 }
-.cam-card img{width:100%;border:2px solid #ddd;border-radius:6px;background:#eee;min-height:120px;}
-.cam-label{font-weight:bold;font-size:13px;margin-bottom:6px;color:#333;}
-.cam-meta{margin-top:8px;font-size:11px;color:#666;font-family:monospace;line-height:1.9;}
+.cam-card:hover{box-shadow:0 6px 20px rgba(0,0,0,.14);transform:translateY(-2px);}
+.cam-card-head{
+    background:var(--navy);color:var(--cyan);font-weight:700;
+    font-size:14px;padding:10px 14px;letter-spacing:.5px;
+}
+.cam-card-body{padding:10px;}
+.cam-card img{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:6px;background:#dfe3ea;}
+.cam-meta{margin-top:8px;font-size:11px;color:var(--muted);font-family:monospace;line-height:1.9;}
 
 /* ── ตารางรายการไฟล์ ── */
 .file-table{
-    width:100%;border-collapse:collapse;background:#fff;
-    border-radius:10px;overflow:hidden;
+    width:100%;border-collapse:collapse;background:var(--card);
+    border-radius:12px;overflow:hidden;
     box-shadow:0 2px 10px rgba(0,0,0,.08);
     font-size:13px;
 }
-.file-table thead{background:#1a1a2e;color:#00e5ff;}
+.file-table thead{background:var(--navy);color:var(--cyan);}
 .file-table thead th{
     padding:12px 14px;text-align:left;
-    font-size:11px;letter-spacing:1px;font-weight:bold;
+    font-size:11px;letter-spacing:1px;font-weight:700;
 }
 .file-table tbody tr{
     border-bottom:1px solid #f0f0f0;
-    transition:background .15s;cursor:pointer;
+    transition:background .15s,box-shadow .15s;cursor:pointer;
 }
-.file-table tbody tr:hover{background:#f0faff;}
+.file-table tbody tr:hover{background:var(--cyan-dim);box-shadow:inset 3px 0 0 var(--cyan);}
 .file-table tbody tr:last-child{border-bottom:none;}
 .file-table td{padding:10px 14px;vertical-align:middle;}
+.id-chip{
+    display:inline-block;min-width:26px;text-align:center;
+    background:#eef1f6;color:#556;border-radius:5px;
+    padding:3px 7px;font-family:monospace;font-size:12px;font-weight:700;
+}
 .file-thumb{
     width:56px;height:40px;object-fit:cover;
     border-radius:4px;border:1px solid #ddd;background:#eee;
@@ -251,7 +276,7 @@ button:disabled{opacity:.35;cursor:not-allowed;}
 .modal-time{font-size:12px;color:#888;font-family:monospace;}
 .modal-close{
     display:block;width:100%;margin-top:12px;
-    padding:10px;background:#1a1a2e;color:#fff;
+    padding:10px;background:var(--navy);color:#fff;
     border:none;border-radius:6px;cursor:pointer;font-size:14px;
 }
 .modal-close:hover{background:#2a2a4e;}
@@ -276,16 +301,20 @@ button:disabled{opacity:.35;cursor:not-allowed;}
 </div>
 
 <!-- MAP -->
-<div class="map-wrap">
-    <div id="map"></div>
-    <div class="gps-box" id="gps-box">📍 กำลังหาตำแหน่ง...</div>
+<div class="map-section">
+    <div class="map-label">MAP</div>
+    <div class="map-wrap">
+        <div id="map"></div>
+        <div class="gps-box" id="gps-box">📍 กำลังหาตำแหน่ง...</div>
+    </div>
 </div>
 
-<!-- CONTROLS -->
+<!-- CONTROLS: 4 ปุ่มตามผัง -->
 <div class="controls">
-    <button class="btn-once"  onclick="manualCapture()">📷 ถ่ายครั้งเดียว</button>
-    <button class="btn-start" id="btn-start" onclick="startAuto()">▶ เริ่มถ่าย</button>
-    <button class="btn-stop"  id="btn-stop"  onclick="stopAuto()" disabled>⏹ หยุดถ่าย</button>
+    <button class="btn-once"  onclick="manualCapture()">📷 ปุ่มสั่งถ่ายภาพครั้งเดียว</button>
+    <button class="btn-start" id="btn-start" onclick="startAuto()">▶ ปุ่มสั่งถ่ายภาพแบบ loop</button>
+    <button class="btn-stop"  id="btn-stop"  onclick="stopAuto()" disabled>⏹ ปุ่มสั่งหยุดถ่ายภาพแบบ loop</button>
+    <button class="btn-wipe"  onclick="deleteAllCaptures()">🗑️ ลบรูปทั้งหมดใน Database</button>
     <button class="btn-cam"   onclick="stopCamera()">🔴 ปิดกล้อง</button>
     <span id="status">พร้อมใช้งาน</span>
 </div>
@@ -295,14 +324,18 @@ button:disabled{opacity:.35;cursor:not-allowed;}
     <h2>ภาพล่าสุดจากกล้อง</h2>
     <div class="cam-row">
         <div class="cam-card">
-            <div class="cam-label">📷 LEFT Camera</div>
-            <img id="local1" src="" alt="ยังไม่มีภาพ">
-            <div class="cam-meta" id="meta1">—</div>
+            <div class="cam-card-head">left camera</div>
+            <div class="cam-card-body">
+                <img id="local1" src="" alt="ยังไม่มีภาพ">
+                <div class="cam-meta" id="meta1">—</div>
+            </div>
         </div>
         <div class="cam-card">
-            <div class="cam-label">📷 RIGHT Camera</div>
-            <img id="local2" src="" alt="ยังไม่มีภาพ">
-            <div class="cam-meta" id="meta2">—</div>
+            <div class="cam-card-head">right camera</div>
+            <div class="cam-card-body">
+                <img id="local2" src="" alt="ยังไม่มีภาพ">
+                <div class="cam-meta" id="meta2">—</div>
+            </div>
         </div>
     </div>
 </div>
@@ -310,22 +343,23 @@ button:disabled{opacity:.35;cursor:not-allowed;}
 <!-- รายการไฟล์จาก DB -->
 <div class="section">
     <h2>
-        รายการภาพจาก Database
-        <span class="badge" id="db-count">0 รายการ</span>
+        แสดงข้อมูลใน database 50 ภาพล่าสุด
+        <span class="badge" id="db-count">ทั้งหมดใน DB: 0</span>
     </h2>
     <table class="file-table">
         <thead>
             <tr>
-                <th>รูป</th>
-                <th>ชื่อไฟล์</th>
-                <th>กล้อง</th>
-                <th>เวลา (UTC+7)</th>
-                <th>พิกัด GPS</th>
-                <th>จัดการ</th>
+                <th>ID :</th>
+                <th>IMG :</th>
+                <th>NAME :</th>
+                <th>CAM :</th>
+                <th>TIME (เชียงใหม่) :</th>
+                <th>GPS :</th>
+                <th>DELETE :</th>
             </tr>
         </thead>
         <tbody id="fileTableBody">
-            <tr class="empty-row"><td colspan="6">กำลังโหลด...</td></tr>
+            <tr class="empty-row"><td colspan="7">กำลังโหลด...</td></tr>
         </tbody>
     </table>
 </div>
@@ -413,7 +447,7 @@ async function manualCapture(){
 
 async function startAuto(){
     await fetch('/start_auto',{method:'POST'});
-    setStatus('ถ่ายอัตโนมัติทุก 5 วิ...');
+    setStatus('ถ่ายอัตโนมัติทุก 10 วิ...');
     document.getElementById('btn-start').disabled=true;
     document.getElementById('btn-stop').disabled=false;
     setCam(1,true); setCam(2,true);
@@ -421,7 +455,7 @@ async function startAuto(){
         autoTimer=setInterval(async()=>{
             await loadLatest();
             await loadDB();
-        },5000);
+        },10000);
     }
     const res = await fetch('/capture',{method:'POST'});
     const data = await res.json();
@@ -469,23 +503,32 @@ function updateLocal(data){
     if(meta2) meta2.innerHTML=`เวลา: ${data.timestamp}<br>${gpsText}`;
 }
 
-// ─── โหลดตารางจาก DB ────────────────────────────
+// ─── โหลดตารางจาก DB (ล่าสุด 50 ภาพ) ────────────
 async function loadDB(){
     try{
         const res=await fetch('/server_captures');
-        const list=await res.json();
+        const payload=await res.json();
+
         const tbody=document.getElementById('fileTableBody');
 
-        if(!list||list.error||!list.length){
-            tbody.innerHTML='<tr class="empty-row"><td colspan="6">ยังไม่มีข้อมูลใน database</td></tr>';
-            document.getElementById('db-count').textContent='0 รายการ';
+        if(!payload || payload.error){
+            tbody.innerHTML=`<tr class="empty-row"><td colspan="7">⚠ โหลดไม่ได้: ${payload && payload.error ? payload.error : 'unknown error'}</td></tr>`;
+            document.getElementById('db-count').textContent='ทั้งหมดใน DB: 0';
             return;
         }
 
-        document.getElementById('db-count').textContent=list.length+' รายการ';
+        const list  = payload.items || [];
+        const total = payload.total ?? list.length;
+
+        document.getElementById('db-count').textContent = 'ทั้งหมดใน DB: ' + total;
+
+        if(!list.length){
+            tbody.innerHTML='<tr class="empty-row"><td colspan="7">ยังไม่มีข้อมูลใน database</td></tr>';
+            return;
+        }
 
         tbody.innerHTML=list.map(item=>{
-            const isLeft = item.device_id.includes('LEFT');
+            const isLeft = (item.device_id || '').includes('LEFT');
             const badge  = isLeft
                 ? `<span class="device-badge left-badge">${item.device_id}</span>`
                 : `<span class="device-badge right-badge">${item.device_id}</span>`;
@@ -499,6 +542,7 @@ async function loadDB(){
 
             return `
             <tr onclick="openModal('${dataJson}')">
+                <td><span class="id-chip">${item.id}</span></td>
                 <td><img class="file-thumb" src="${item.image_url}?t=${Date.now()}" loading="lazy"></td>
                 <td style="font-family:monospace;font-size:12px;color:#555;">${item.filename}</td>
                 <td>${badge}</td>
@@ -512,7 +556,7 @@ async function loadDB(){
 
     } catch(e){
         document.getElementById('fileTableBody').innerHTML=
-            `<tr class="empty-row"><td colspan="6">⚠ โหลดไม่ได้: ${e.message}</td></tr>`;
+            `<tr class="empty-row"><td colspan="7">⚠ โหลดไม่ได้: ${e.message}</td></tr>`;
     }
 }
 
@@ -534,6 +578,23 @@ async function deleteCapture(filename){
     }
 }
 
+// ─── ลบรูปทั้งหมดใน Database ────────────────────
+async function deleteAllCaptures(){
+    if(!confirm('⚠️ คำเตือน: นี่คือฐานข้อมูลกลางที่ใช้ร่วมกับอุปกรณ์/กล้องอื่นด้วย\n\nการกดยืนยันจะลบรูปภาพ "ทั้งหมดในระบบ" ทุกอุปกรณ์ ไม่ใช่แค่ของเครื่องนี้ และไม่สามารถย้อนกลับได้\n\nยืนยันลบทั้งหมดใช่หรือไม่?')) return;
+    setStatus('กำลังลบข้อมูลทั้งหมดใน database...');
+    try{
+        const res = await fetch('/delete_all_captures', {method:'DELETE'});
+        const data = await res.json();
+        if(!res.ok || data.error){
+            throw new Error(data.error || `HTTP ${res.status}`);
+        }
+        setStatus(`ลบข้อมูลทั้งหมดสำเร็จ (${data.deleted}/${data.total} รายการ)`);
+        await loadDB();
+    } catch(err){
+        setStatus('⚠ ไม่สามารถลบทั้งหมดได้: '+err.message);
+    }
+}
+
 // ─── MODAL ──────────────────────────────────────
 function openModal(dataJson){
     const item = JSON.parse(decodeURIComponent(dataJson));
@@ -542,7 +603,7 @@ function openModal(dataJson){
     document.getElementById('modal-filename').textContent = '📄 '+item.filename;
     document.getElementById('modal-time').textContent     = '🕐 '+item.captured_at;
 
-    const isLeft = item.device_id.includes('LEFT');
+    const isLeft = (item.device_id || '').includes('LEFT');
     document.getElementById('modal-device').innerHTML = isLeft
         ? `<span class="device-badge left-badge">${item.device_id}</span>`
         : `<span class="device-badge right-badge">${item.device_id}</span>`;
@@ -606,7 +667,6 @@ def save_images():
     global last_capture_time
     if not camera_running:
         return {"error": "Camera stopped"}
-    # for _ in range(3): #ตัดออก - ลดจำนวนภาพค้างจาก 3 เหลือ 1
     cap1.read(); cap2.read()
     ret1, frame1 = cap1.read()
     ret2, frame2 = cap2.read()
@@ -625,11 +685,7 @@ def save_images():
 
     t1 = threading.Thread(target=upload_image, args=(path1, "CAM_LEFT"), daemon=True)
     t2 = threading.Thread(target=upload_image, args=(path2, "CAM_RIGHT"), daemon=True)
-    t1.start();t2.start()
-
-# change upload by threading
-    # upload_image(path1, "CAM_LEFT")
-    # upload_image(path2, "CAM_RIGHT")
+    t1.start(); t2.start()
 
     last_capture_time = time.time()
     global latest_capture
@@ -694,20 +750,52 @@ def update_gps():
 
 @app.route('/server_captures')
 def server_captures():
+    """
+    ดึงรายการภาพทั้งหมดจาก server แล้วส่งกลับเป็น:
+      {
+        "total": <จำนวนภาพทั้งหมดใน database>,
+        "items": [ ...ล่าสุด 50 รายการ... ]   # เรียงใหม่สุดก่อน พร้อมเลข id
+      }
+    """
     try:
         response = requests.get(SERVER_CAPTURES_URL, timeout=10)
         captures = response.json()
-        results  = []
-        for item in captures:
+
+        if not isinstance(captures, list):
+            return jsonify({"error": "รูปแบบข้อมูลจาก server ไม่ถูกต้อง"})
+
+        total = len(captures)
+
+        # เรียงตามเวลาถ่ายล่าสุดก่อน ถ้ามี captured_at ให้ sort, ไม่งั้นถือว่า list เรียงมาแล้ว
+        try:
+            captures_sorted = sorted(
+                captures, key=lambda x: x.get("captured_at", ""), reverse=True
+            )
+        except Exception:
+            captures_sorted = list(reversed(captures))
+
+        latest_items = captures_sorted[:DISPLAY_LIMIT]
+
+        results = []
+        for idx, item in enumerate(latest_items):
+            # ถ้า server ไม่ได้ส่งฟิลด์ id มาด้วย ให้คำนวณเลขลำดับสำรอง
+            # โดยนับจากตำแหน่งจริงในชุดข้อมูลทั้งหมด (ใหม่สุด = total, เก่าสุด = 1)
+            # กันไม่ให้ตาราง id column โชว์ "None"
+            item_id = item.get("id")
+            if item_id is None:
+                item_id = total - idx
+
             results.append({
+                "id":          item_id,
                 "filename":    item["filename"],
                 "device_id":   item["device_id"],
-                "captured_at": item["captured_at"],
-                "image_url":   SERVER_IMAGE_URL + item["filename"],
+                "captured_at": (item["captured_at"]),
+                "image_url":   item.get("image_url") or (SERVER_IMAGE_URL + item["filename"]),
                 "lat":         item.get("lat"),
                 "lng":         item.get("lng"),
             })
-        return jsonify(results)
+
+        return jsonify({"total": total, "items": results})
     except Exception as e:
         return jsonify({"error": str(e)})
 
@@ -715,6 +803,17 @@ def server_captures():
 def delete_capture(filename):
     try:
         target_url = f"{SERVER_CAPTURES_URL}/{filename}"
+        response = requests.delete(target_url, timeout=10)
+        if response.ok:
+            return jsonify({"ok": True, "status_code": response.status_code})
+        return jsonify({"error": response.text or 'Delete failed', "status_code": response.status_code}), response.status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+@app.route('/delete_all_captures', methods=['DELETE'])
+def delete_all_captures():
+    try:
+        target_url = f"{SERVER_CAPTURES_URL}"
         response = requests.delete(target_url, timeout=10)
         if response.ok:
             return jsonify({"ok": True, "status_code": response.status_code})
@@ -740,8 +839,7 @@ def auto_capture():
             time.sleep(1)
 
 if __name__ == '__main__':
-    import threading
     t = threading.Thread(target=auto_capture)
     t.daemon = True
     t.start()
-    app.run(host='0.0.0.0', debug=False, port=5000) #ssl_context='adhoc')
+    app.run(host='0.0.0.0', debug=False, port=5000)

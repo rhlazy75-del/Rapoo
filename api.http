@@ -16,3 +16,15 @@ device_id=CAM_LEFT
 lat=13.755
 lng=100.501
 accuracy=3.2
+
+###
+GET https://geodev.fun/ucs/api/captures/10
+
+
+### delete one capture
+DELETE https://geodev.fun/ucs/api/captures/2b17db77.jpg
+
+
+
+### delete all captures
+DELETE https://geodev.fun/ucs/api/captures
