@@ -12,7 +12,8 @@ app = Flask(__name__)
 # SERVER API
 # =========================
 SERVER_IMAGE_URL    = "https://geodev.fun/ucs/api/image/"
-SERVER_CAPTURES_URL = "https://geodev.fun/ucs/api/captures"
+SERVER_CAPTURES_BASE = "https://geodev.fun/ucs/api/captures"
+SERVER_CAPTURES_URL = "https://geodev.fun/ucs/api/captures/20"
 SERVER_UPLOAD_URL   = "https://geodev.fun/ucs/api/upload"
 SERVER_GPS_URL      = "https://geodev.fun/ucs/api/gps"
 
@@ -22,7 +23,7 @@ SERVER_GPS_URL      = "https://geodev.fun/ucs/api/gps"
 # SERVER_GPS_URL      = "http://localhost:6601/ucs/api/gps"
 
 # จำนวนรายการล่าสุดที่จะแสดงในตาราง
-DISPLAY_LIMIT = 25
+DISPLAY_LIMIT = 20
 
 latest_capture = {}
 latest_gps     = {"lat": None, "lng": None, "accuracy": None}
@@ -1012,7 +1013,7 @@ def server_captures():
 @app.route('/delete_capture/<path:filename>', methods=['DELETE'])
 def delete_capture(filename):
     try:
-        target_url = f"{SERVER_CAPTURES_URL}/{filename}"
+        target_url = f"{SERVER_CAPTURES_BASE}/{filename}"
         response = requests.delete(target_url, timeout=10)
         if response.ok:
             return jsonify({"ok": True, "status_code": response.status_code})
@@ -1023,7 +1024,7 @@ def delete_capture(filename):
 @app.route('/delete_all_captures', methods=['DELETE'])
 def delete_all_captures():
     try:
-        target_url = f"{SERVER_CAPTURES_URL}"
+        target_url = f"{SERVER_CAPTURES_BASE}"
         response = requests.delete(target_url, timeout=10)
         if response.ok:
             return jsonify({"ok": True, "status_code": response.status_code})
