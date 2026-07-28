@@ -18,7 +18,7 @@ lng=100.501
 accuracy=3.2
 
 ###
-GET https://geodev.fun/ucs/api/captures/20
+GET https://geodev.fun/ucs/api/captures/511
 
 
 ### delete one capture

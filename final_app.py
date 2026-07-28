@@ -63,12 +63,14 @@ cap1.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc(*'MJPG'))
 cap1.set(cv.CAP_PROP_FRAME_WIDTH, 1280)
 cap1.set(cv.CAP_PROP_FRAME_HEIGHT, 720)
 cap1.set(cv.CAP_PROP_FPS, 10)
+cap1.set(cv.CAP_PROP_BUFFERSIZE, 1)  #แก้ปัญหาภาพไม่เท่ากันในภาพ
 
 cap2 = cv.VideoCapture(CAM2_DEVICE, cv.CAP_V4L2)
 cap2.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc(*'MJPG'))
 cap2.set(cv.CAP_PROP_FRAME_WIDTH, 1280)
 cap2.set(cv.CAP_PROP_FRAME_HEIGHT, 720)
 cap2.set(cv.CAP_PROP_FPS, 10)
+cap2.set(cv.CAP_PROP_BUFFERSIZE, 1)  #แก้ปัญหาภาพไม่เท่ากันในภาพ
 
 print("Camera1:", cap1.isOpened())
 print("Camera2:", cap2.isOpened())
@@ -162,7 +164,7 @@ def reset_camera_to_default():
 
 # ═══════ จบส่วนปรับค่ากล้อง +/- ═══════
 
-capture_interval     = 10 
+capture_interval     = 5.0  # วินาที
 last_capture_time    = time.time()
 auto_capture_enabled = False
 camera_running       = True
@@ -589,6 +591,24 @@ function setCam(n,on){
 
 // ─── CAPTURE ────────────────────────────────────
 let autoTimer=null;
+let wakelock=null; // ป้องกันมือถือหลับหน้าจอเวลาเปิดถ่ายอัตโนมัติ
+
+async function requestWakeLock(){
+    try{
+        if('wakeLock' in navigator){
+            wakelock = await navigator.wakeLock.request('screen');
+            console.log('Wake Lock acquired');
+        }
+    }catch(err){console.error('Wake Lock error:', err);}
+}
+function releaseWakeLock(){
+    if(wakelock){ wakelock.release(); wakelock=null; }
+}
+document.addEventListener('visibilitychange', ()=>{
+    if(autoTimer && document.visibilityState === 'visible'){
+        requestWakeLock();
+    }
+});
 
 async function manualCapture(){
     setStatus('กำลังถ่ายภาพ...');
@@ -600,7 +620,8 @@ async function manualCapture(){
 
 async function startAuto(){
     await fetch('/start_auto',{method:'POST'});
-    setStatus('ถ่ายอัตโนมัติทุก 10 วิ...');
+    await requestWakeLock();
+    setStatus('ถ่ายอัตโนมัติทุก 5 วิ...');
     document.getElementById('btn-start').disabled=true;
     document.getElementById('btn-stop').disabled=false;
     setCam(1,true); setCam(2,true);
@@ -608,7 +629,7 @@ async function startAuto(){
         autoTimer=setInterval(async()=>{
             await loadLatest();
             await loadDB();
-        },10000);
+        },5000);
     }
     const res = await fetch('/capture',{method:'POST'});
     const data = await res.json();
@@ -618,11 +639,12 @@ async function startAuto(){
 
 async function stopAuto(){
     clearInterval(autoTimer); autoTimer=null;
+    releaseWakeLock();
     await fetch('/stop_auto',{method:'POST'});
     setStatus('หยุดถ่ายภาพแล้ว');
     document.getElementById('btn-start').disabled=false;
     document.getElementById('btn-stop').disabled=true;
-    setCam(1,false); setCam(2,false);
+    setCam(1,false); setCam(2,false);   
 }
 
 async function stopCamera(){
@@ -630,6 +652,7 @@ async function stopCamera(){
     const data=await res.json();
     setStatus(data.message);
     setCam(1,false); setCam(2,false);
+    releaseWakeLock();
 }
 
 async function loadLatest(){
@@ -855,7 +878,9 @@ def save_images():
     global last_capture_time
     if not camera_running:
         return {"error": "Camera stopped"}
-    cap1.read(); cap2.read()
+    for _ in range(3):  # ลองอ่านภาพ 3 ครั้ง ถ้า fail จะ retry
+        cap1.read(); cap2.read()
+        time.sleep(0.03)
     ret1, frame1 = cap1.read()
     ret2, frame2 = cap2.read()
 
