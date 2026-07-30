@@ -27,6 +27,7 @@ DISPLAY_LIMIT = 20
 
 latest_capture = {}
 latest_gps     = {"lat": None, "lng": None, "accuracy": None}
+capture_lock = threading.Lock()
 
 folder_name = "capture_images"
 os.makedirs(folder_name, exist_ok=True)
@@ -62,14 +63,14 @@ cap1 = cv.VideoCapture(CAM1_DEVICE, cv.CAP_V4L2)
 cap1.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc(*'MJPG'))
 cap1.set(cv.CAP_PROP_FRAME_WIDTH, 1280)
 cap1.set(cv.CAP_PROP_FRAME_HEIGHT, 720)
-cap1.set(cv.CAP_PROP_FPS, 10)
+cap1.set(cv.CAP_PROP_FPS, 5)
 cap1.set(cv.CAP_PROP_BUFFERSIZE, 1)  #แก้ปัญหาภาพไม่เท่ากันในภาพ
 
 cap2 = cv.VideoCapture(CAM2_DEVICE, cv.CAP_V4L2)
 cap2.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc(*'MJPG'))
 cap2.set(cv.CAP_PROP_FRAME_WIDTH, 1280)
 cap2.set(cv.CAP_PROP_FRAME_HEIGHT, 720)
-cap2.set(cv.CAP_PROP_FPS, 10)
+cap2.set(cv.CAP_PROP_FPS, 5)
 cap2.set(cv.CAP_PROP_BUFFERSIZE, 1)  #แก้ปัญหาภาพไม่เท่ากันในภาพ
 
 print("Camera1:", cap1.isOpened())
@@ -878,37 +879,43 @@ def save_images():
     global last_capture_time
     if not camera_running:
         return {"error": "Camera stopped"}
-    for _ in range(3):  # ลองอ่านภาพ 3 ครั้ง ถ้า fail จะ retry
-        cap1.read(); cap2.read()
-        time.sleep(0.03)
-    ret1, frame1 = cap1.read()
-    ret2, frame2 = cap2.read()
+    if not capture_lock.acquire(blocking=False):
+        return {"error": "Capture in progress"}
+    try:
+        for _ in range(3):  # ลองอ่านภาพ 3 ครั้ง ถ้า fail จะ retry
+            cap1.read(); cap2.read()
+            time.sleep(0.03)
+        ret1, frame1 = cap1.read()
+        ret2, frame2 = cap2.read()
 
-    if not ret1: return {"error": "Camera 1 failed"}
-    if not ret2: return {"error": "Camera 2 failed"}
+        if not ret1: return {"error": "Camera 1 failed"}
+        if not ret2: return {"error": "Camera 2 failed"}
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    img1  = f"cap1_{timestamp}.jpg"
-    img2  = f"cap2_{timestamp}.jpg"
-    path1 = os.path.join(folder_name, img1)
-    path2 = os.path.join(folder_name, img2)
-    cv.imwrite(path1, frame1)
-    cv.imwrite(path2, frame2)
-    print(f"Saved: {path1}, {path2}")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        img1  = f"cap1_{timestamp}.jpg"
+        img2  = f"cap2_{timestamp}.jpg"
+        path1 = os.path.join(folder_name, img1)
+        path2 = os.path.join(folder_name, img2)
+        cv.imwrite(path1, frame1)
+        cv.imwrite(path2, frame2)
+        print(f"Saved: {path1}, {path2}")
 
-    t1 = threading.Thread(target=upload_image, args=(path1, "CAM_LEFT"), daemon=True)
-    t2 = threading.Thread(target=upload_image, args=(path2, "CAM_RIGHT"), daemon=True)
-    t1.start(); t2.start()
+        t1 = threading.Thread(target=upload_image, args=(path1, "CAM_LEFT"), daemon=True)
+        t2 = threading.Thread(target=upload_image, args=(path2, "CAM_RIGHT"), daemon=True)
+        t1.start(); t2.start()
 
-    last_capture_time = time.time()
-    global latest_capture
-    latest_capture = {
-        "cap1": img1, "cap2": img2,
-        "timestamp": timestamp,
-        "lat": latest_gps.get("lat"),
-        "lng": latest_gps.get("lng"),
-    }
-    return latest_capture
+        last_capture_time = time.time()
+        global latest_capture
+        latest_capture = {
+            "cap1": img1, "cap2": img2,
+            "timestamp": timestamp,
+            "lat": latest_gps.get("lat"),
+            "lng": latest_gps.get("lng"),
+        }
+        return latest_capture
+    finally:
+        capture_lock.release()
+    
 
 @app.route('/')
 def index():

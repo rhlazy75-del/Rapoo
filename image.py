@@ -5,7 +5,7 @@ import requests
 BASE_URL = "https://geodev.fun"
 LIMIT = 9999
 OUTPUT = r"C:\GEO\image_499"
-FOLDER = "2026-07-28"
+FOLDER = "2026-07-30"
 
 def get_captures(limit: int = LIMIT):
     url = f"{BASE_URL}/ucs/api/captures/{limit}"
