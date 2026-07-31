@@ -4,6 +4,8 @@ import os
 import time
 import requests
 import threading
+import queue
+import json
 from datetime import datetime
 
 app = Flask(__name__)
@@ -58,6 +60,7 @@ BRIGHTNESS_VALUE = 0
 CONTRAST_VALUE   = 32
 SATURATION_VALUE = 64
 GAIN_VALUE       = 0
+SHARPNESS_VALUE  = 3   # ยืนยันจาก v4l2-ctl -d /dev/video0 --list-ctrls : min=0 max=6 step=1 default=3
 
 cap1 = cv.VideoCapture(CAM1_DEVICE, cv.CAP_V4L2)
 cap1.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc(*'MJPG'))
@@ -92,6 +95,7 @@ def apply_settings(device, exp):
     v4l2_set(device, "contrast", CONTRAST_VALUE)
     v4l2_set(device, "saturation", SATURATION_VALUE)
     v4l2_set(device, "gain", GAIN_VALUE)
+    v4l2_set(device, "sharpness", SHARPNESS_VALUE)   # เพิ่ม: ทำให้ขอบภาพคมขึ้น
 
 apply_settings(CAM1_DEVICE, EXPOSURE_VALUE)
 apply_settings(CAM2_DEVICE, EXPOSURE_VALUE)
@@ -112,6 +116,7 @@ camera_state = {
     "contrast":            CONTRAST_VALUE,
     "saturation":          SATURATION_VALUE,
     "gain":                GAIN_VALUE,
+    "sharpness":           SHARPNESS_VALUE,
 }
 
 # ขอบเขตค่าที่อนุญาตให้ปรับ กันกด +/- จนเกินขอบที่กล้องรองรับ
@@ -122,6 +127,7 @@ CAMERA_LIMITS = {
     "contrast":            (0, 64),
     "saturation":          (0, 128),
     "gain":                (0, 100),
+    "sharpness":           (0, 6),      # ยืนยันแล้วจาก v4l2-ctl --list-ctrls ของกล้องจริง
 }
 
 CAMERA_STEP = {
@@ -130,6 +136,7 @@ CAMERA_STEP = {
     "contrast": 4,
     "saturation": 8,
     "gain": 5,
+    "sharpness": 1,
 }
 
 def adjust_camera(control, direction):
@@ -158,12 +165,114 @@ def reset_camera_to_default():
         "contrast":            CONTRAST_VALUE,
         "saturation":          SATURATION_VALUE,
         "gain":                GAIN_VALUE,
+        "sharpness":           SHARPNESS_VALUE,
     }
     apply_settings(CAM1_DEVICE, EXPOSURE_VALUE)
     apply_settings(CAM2_DEVICE, EXPOSURE_VALUE)
     return camera_state
 
 # ═══════ จบส่วนปรับค่ากล้อง +/- ═══════
+
+
+# ═══════ ส่วนอัปโหลดขึ้น server แบบ queue + retry (กันภาพตกหล่น / กันอัปโหลดช้าเพราะยิงพร้อมกันหลาย thread) ═══════
+UPLOAD_QUEUE_FILE  = "upload_queue.json"
+UPLOAD_MAX_RETRIES = 30          # ลองส่งซ้ำได้สูงสุดกี่ครั้งก่อนยอมแพ้ (แล้ว log ไว้ใน failed_uploads.log)
+UPLOAD_RETRY_DELAY = 10          # วินาที รอก่อน retry แต่ละครั้งที่ fail
+
+upload_queue = queue.Queue()
+upload_queue_lock = threading.Lock()
+
+def load_pending_uploads():
+    """ตอนเปิดโปรแกรมใหม่ โหลดรายการไฟล์ที่ยัง upload ไม่สำเร็จจากรอบก่อนกลับเข้า queue
+    (กันกรณีปิดโปรแกรม/ไฟดับ/เน็ตหลุดตอนกำลังอัปโหลดค้างอยู่)"""
+    if os.path.exists(UPLOAD_QUEUE_FILE):
+        try:
+            with open(UPLOAD_QUEUE_FILE, 'r') as f:
+                pending = json.load(f)
+            for item in pending:
+                upload_queue.put(item)
+            print(f"โหลด pending uploads ค้างจากรอบก่อน: {len(pending)} ไฟล์")
+        except Exception as e:
+            print(f"โหลด upload queue เดิมไม่ได้: {e}")
+
+def save_pending_uploads():
+    """เซฟสถานะ queue ปัจจุบันลงไฟล์ทุกครั้งที่มีการเปลี่ยนแปลง กันตกหล่นถ้าโปรแกรมถูกปิด/แครชกลางคัน"""
+    with upload_queue_lock:
+        items = list(upload_queue.queue)
+    try:
+        with open(UPLOAD_QUEUE_FILE, 'w') as f:
+            json.dump(items, f)
+    except Exception as e:
+        print(f"เซฟ upload queue ไม่ได้: {e}")
+
+def enqueue_upload(filepath, device_id, lat, lng, acc):
+    """เพิ่มไฟล์เข้าคิวรออัปโหลด แทนที่จะยิง thread ทันทีแบบเดิม"""
+    item = {
+        "filepath": filepath,
+        "device_id": device_id,
+        "lat": lat, "lng": lng, "accuracy": acc,
+        "retries": 0,
+    }
+    upload_queue.put(item)
+    save_pending_uploads()
+
+def upload_worker():
+    """เธรดพื้นหลังตัวเดียว ทำงานตลอดชีวิตโปรแกรม ดึงไฟล์จาก queue ไปส่งทีละไฟล์
+    - ทำทีละไฟล์ (ไม่ยิงพร้อมกันหลาย thread) กันเน็ต Pi โดนแย่ง bandwidth จนทุก request ช้า/timeout
+    - ถ้า fail จะใส่กลับเข้า queue ใหม่และลองใหม่อัตโนมัติ ไม่ปล่อยให้ภาพหายเงียบๆ เหมือนเดิม
+    """
+    while True:
+        item = upload_queue.get()
+        filepath = item["filepath"]
+
+        if not os.path.exists(filepath):
+            print(f"[UPLOAD SKIP] ไฟล์หายไปแล้ว: {filepath}")
+            upload_queue.task_done()
+            save_pending_uploads()
+            continue
+
+        try:
+            with open(filepath, 'rb') as img:
+                files = {'image': img}
+                data = {
+                    'device_id': item["device_id"],
+                    'lat':      str(item["lat"]) if item["lat"] is not None else '',
+                    'lng':      str(item["lng"]) if item["lng"] is not None else '',
+                    'accuracy': str(item["accuracy"]) if item["accuracy"] is not None else '',
+                }
+                response = requests.post(SERVER_UPLOAD_URL, files=files, data=data, timeout=20)
+
+            if response.ok:
+                print(f"[UPLOAD OK] {filepath} -> {item['device_id']} ({response.status_code})")
+                upload_queue.task_done()
+                save_pending_uploads()
+            else:
+                raise Exception(f"HTTP {response.status_code}: {response.text[:100]}")
+
+        except Exception as e:
+            item["retries"] += 1
+            print(f"[UPLOAD FAIL] {filepath} ครั้งที่ {item['retries']}: {e}")
+            upload_queue.task_done()
+
+            if item["retries"] >= UPLOAD_MAX_RETRIES:
+                print(f"[UPLOAD GIVE UP] {filepath} ลองครบ {UPLOAD_MAX_RETRIES} ครั้งแล้วไม่สำเร็จ — บันทึกลง failed_uploads.log")
+                try:
+                    with open("failed_uploads.log", "a") as f:
+                        f.write(f"{datetime.now()} | {filepath} | {item['device_id']} | {e}\n")
+                except Exception:
+                    pass
+                save_pending_uploads()
+            else:
+                time.sleep(UPLOAD_RETRY_DELAY)
+                upload_queue.put(item)
+                save_pending_uploads()
+
+def get_upload_queue_status():
+    with upload_queue_lock:
+        pending = len(upload_queue.queue)
+    return {"pending": pending}
+
+# ═══════ จบส่วนอัปโหลด queue + retry ═══════
 
 capture_interval     = 5.0  # วินาที
 last_capture_time    = time.time()
@@ -279,6 +388,23 @@ button:disabled{opacity:.35;cursor:not-allowed;}
 .adjust-default{
     font-size:11px;color:var(--muted);font-family:monospace;
 }
+
+/* UPLOAD STATUS PANEL */
+.upload-status-section{
+    margin:20px;background:var(--card);padding:14px 16px;border-radius:12px;
+    box-shadow:0 2px 10px rgba(0,0,0,.06);
+    border-left:4px solid #00c853;
+    display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+}
+.upload-status-title{
+    font-size:13px;letter-spacing:1px;text-transform:uppercase;
+    color:var(--muted);font-weight:700;
+}
+.upload-pending-badge{
+    background:var(--navy);color:#39ff6b;font-size:13px;
+    padding:5px 12px;border-radius:10px;font-family:monospace;font-weight:700;
+}
+.upload-pending-badge.has-pending{color:#ffb300;}
 
 /* SECTION */
 .section{margin:20px;}
@@ -427,6 +553,15 @@ button:disabled{opacity:.35;cursor:not-allowed;}
     <span id="status">พร้อมใช้งาน</span>
 </div>
 
+<!-- ═══ สถานะคิวอัปโหลดขึ้น server ═══ -->
+<div class="upload-status-section">
+    <span class="upload-status-title">☁️ สถานะอัปโหลดขึ้น Server</span>
+    <span class="upload-pending-badge" id="upload-pending-badge">รอส่ง: 0</span>
+    <span id="upload-status-note" style="font-size:12px;color:var(--muted);">
+        ภาพที่ถ่ายจะเข้าคิวส่งอัตโนมัติ ถ้าส่งไม่สำเร็จจะลองใหม่เองจนกว่าจะสำเร็จ
+    </span>
+</div>
+
 <!-- ═══ แถบปรับค่ากล้อง +/- ═══ -->
 <div class="adjust-section">
     <div class="adjust-head">
@@ -472,6 +607,14 @@ button:disabled{opacity:.35;cursor:not-allowed;}
         <span class="adjust-value" id="val-gain">0</span>
         <button class="adjust-btn" onclick="adjustCam('gain','up')">+</button>
         <span class="adjust-default">(ค่าเดิมในโค้ด: 0)</span>
+    </div>
+
+    <div class="adjust-row" data-control="sharpness">
+        <span class="adjust-label">Sharpness (คมชัด)</span>
+        <button class="adjust-btn" onclick="adjustCam('sharpness','down')">−</button>
+        <span class="adjust-value" id="val-sharpness">3</span>
+        <button class="adjust-btn" onclick="adjustCam('sharpness','up')">+</button>
+        <span class="adjust-default">(ค่าเดิมในโค้ด: 3, ช่วง 0-6)</span>
     </div>
 </div>
 
@@ -617,6 +760,7 @@ async function manualCapture(){
     const data=await res.json();
     updateLocal(data);
     loadDB();
+    loadUploadStatus();
 }
 
 async function startAuto(){
@@ -630,12 +774,14 @@ async function startAuto(){
         autoTimer=setInterval(async()=>{
             await loadLatest();
             await loadDB();
+            await loadUploadStatus();
         },5000);
     }
     const res = await fetch('/capture',{method:'POST'});
     const data = await res.json();
     updateLocal(data);
     loadDB();
+    loadUploadStatus();
 }
 
 async function stopAuto(){
@@ -714,6 +860,21 @@ async function loadCameraState(){
     }
 }
 loadCameraState();  // ดึงค่าปัจจุบันจาก backend มาโชว์ตอนเปิดหน้าเว็บ
+
+// ─── สถานะคิวอัปโหลด ──────────────────────────
+async function loadUploadStatus(){
+    try{
+        const res = await fetch('/upload_status');
+        const data = await res.json();
+        const badge = document.getElementById('upload-pending-badge');
+        badge.textContent = 'รอส่ง: ' + data.pending;
+        badge.classList.toggle('has-pending', data.pending > 0);
+    }catch(e){
+        console.error('โหลดสถานะ upload ไม่ได้', e);
+    }
+}
+loadUploadStatus();
+setInterval(loadUploadStatus, 4000); // เช็คสถานะคิวอัปโหลดทุก 4 วิ ไม่ต้องรอ auto capture
 
 // ─── โหลดตารางจาก DB (ล่าสุด 50 ภาพ) ────────────
 async function loadDB(){
@@ -855,26 +1016,6 @@ loadDB();
 </html>
 '''
 
-def upload_image(filepath, device_id):
-    lat = latest_gps.get("lat")
-    lng = latest_gps.get("lng")
-    acc = latest_gps.get("accuracy")
-    try:
-        with open(filepath, 'rb') as img:
-            files = {'image': img}
-            data  = {
-                'device_id': device_id,
-                'lat':      str(lat) if lat is not None else '',
-                'lng':      str(lng) if lng is not None else '',
-                'accuracy': str(acc) if acc is not None else '',
-            }
-            response = requests.post(SERVER_UPLOAD_URL, files=files, data=data, timeout=10)
-        print(f"UPLOAD {device_id} | {response.status_code} | lat={lat} lng={lng}")
-        print(f"  server: {response.text[:100]}")
-    except Exception as e:
-        print(f"UPLOAD ERROR {device_id}: {e}")
-
-
 def save_images():
     global last_capture_time
     if not camera_running:
@@ -900,9 +1041,10 @@ def save_images():
         cv.imwrite(path2, frame2)
         print(f"Saved: {path1}, {path2}")
 
-        t1 = threading.Thread(target=upload_image, args=(path1, "CAM_LEFT"), daemon=True)
-        t2 = threading.Thread(target=upload_image, args=(path2, "CAM_RIGHT"), daemon=True)
-        t1.start(); t2.start()
+        # เข้าคิวอัปโหลดแทนการยิง thread ลอยๆ แบบเดิม
+        # (worker เดียวทำทีละไฟล์ + retry อัตโนมัติ กันภาพหายและกันอัปโหลดช้าเพราะแย่ง bandwidth)
+        enqueue_upload(path1, "CAM_LEFT",  latest_gps.get("lat"), latest_gps.get("lng"), latest_gps.get("accuracy"))
+        enqueue_upload(path2, "CAM_RIGHT", latest_gps.get("lat"), latest_gps.get("lng"), latest_gps.get("accuracy"))
 
         last_capture_time = time.time()
         global latest_capture
@@ -991,6 +1133,12 @@ def get_camera_state():
 
 # ═══════ จบ ROUTES ปรับค่ากล้อง ═══════
 
+# ═══════ ROUTE สถานะคิวอัปโหลด ═══════
+@app.route('/upload_status')
+def upload_status_route():
+    return jsonify(get_upload_queue_status())
+# ═══════ จบ ROUTE สถานะคิวอัปโหลด ═══════
+
 @app.route('/server_captures')
 def server_captures():
     """
@@ -1001,7 +1149,7 @@ def server_captures():
       }
     """
     try:
-        response = requests.get(SERVER_CAPTURES_URL, timeout=10)
+        response = requests.get(SERVER_CAPTURES_URL, timeout= 5)
         captures = response.json()
 
         if not isinstance(captures, list):
@@ -1082,6 +1230,12 @@ def auto_capture():
             time.sleep(1)
 
 if __name__ == '__main__':
+    load_pending_uploads()                # โหลดไฟล์ที่ยัง upload ไม่สำเร็จจากรอบก่อน (ถ้ามี)
+
+    t_upload = threading.Thread(target=upload_worker)  # worker อัปโหลดพื้นหลัง (ทีละไฟล์ + retry)
+    t_upload.daemon = True
+    t_upload.start()
+
     t = threading.Thread(target=auto_capture)
     t.daemon = True
     t.start()
